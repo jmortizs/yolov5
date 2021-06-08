@@ -126,6 +126,8 @@ if __name__ == '__main__':
     ap.add_argument('--output', required=True, type=str, help='output folder')
 
     ARGS = ap.parse_args()
+    MAX_SAMPLES = 220
+    RAMDOM_STATE = 1992
 
     annotations = []
     # get all posible classes in the dataset
@@ -138,8 +140,19 @@ if __name__ == '__main__':
 
         annotations.append(root)
 
+    # balance
+    df = pd.DataFrame({'annotation': annotations, 'class': classes})
+    df_2 = pd.DataFrame()
+    for c in df['class'].unique():
+        df_tmp = df[df['class'] == c]
+        if len(df_tmp) > MAX_SAMPLES:
+            df_tmp = df_tmp.sample(n=MAX_SAMPLES, replace=False)
+
+        df_2 = pd.concat([df_2, df_tmp])
+
     # train test split
-    annotations_train, annotations_test = train_test_split(annotations, test_size=ARGS.test, stratify=classes, random_state=811295)
+    annotations_train, annotations_val = train_test_split(df_2['annotation'].values, test_size=ARGS.test, stratify=df_2['class'].values, random_state=RAMDOM_STATE)
+    annotations_val, annotations_test = train_test_split(annotations_val, test_size=0.5, random_state=RAMDOM_STATE)
 
     unique_classes = sorted(set(classes))
     unique_classes = {c:i for i, c in enumerate(unique_classes)}
@@ -148,10 +161,16 @@ if __name__ == '__main__':
     folder_train_img.mkdir(parents=True, exist_ok=True)
     folder_train_labels = Path(ARGS.output) / 'train' / 'labels'
     folder_train_labels.mkdir(parents=True, exist_ok=True)
+    # data augmentation loop
     for annotation in annotations_train:
         for n in range(ARGS.augment):
-            img, img_name, labels = process_annotation(annotation, ARGS.source, size=ARGS.size, classes=unique_classes, shift_range=0.15, brightness=0.4)
+            if n == 0: # Keep the original sample
+                img, img_name, labels = process_annotation(annotation, ARGS.source, size=ARGS.size, classes=unique_classes)
+            else:
+                img, img_name, labels = process_annotation(annotation, ARGS.source, size=ARGS.size, classes=unique_classes, shift_range=0.15, brightness=0.4)
+
             file_id = sha1(img).hexdigest()
+            file_id = str(labels[0][0]) + file_id[:8] #class id + sha1 id
             file_image_name = f'{img_name}.{file_id}.png'
             file_labels_name = f'{img_name}.{file_id}.txt'
 
@@ -161,6 +180,23 @@ if __name__ == '__main__':
                 for l in labels:
                     f.write(f'{l[0]} {l[1]} {l[2]} {l[3]} {l[4]}\n')
 
+    folder_val_img = Path(ARGS.output) / 'val' / 'images'
+    folder_val_img.mkdir(parents=True, exist_ok=True)
+    folder_val_labels = Path(ARGS.output) / 'val' / 'labels'
+    folder_val_labels.mkdir(parents=True, exist_ok=True)
+    for annotation in annotations_val:
+        img, img_name, labels = process_annotation(annotation, ARGS.source, size=ARGS.size, classes=unique_classes)
+        file_id = sha1(img).hexdigest()
+        file_id = str(labels[0][0]) + file_id[:8] #class id + sha1 id
+        file_image_name = f'{img_name}.{file_id}.png'
+        file_labels_name = f'{img_name}.{file_id}.txt'
+
+        cv.imwrite(str(folder_val_img / file_image_name), img)
+
+        with open(folder_val_labels / file_labels_name, 'w') as f:
+            for l in labels:
+                f.write(f'{l[0]} {l[1]} {l[2]} {l[3]} {l[4]}\n')
+
     folder_test_img = Path(ARGS.output) / 'test' / 'images'
     folder_test_img.mkdir(parents=True, exist_ok=True)
     folder_test_labels = Path(ARGS.output) / 'test' / 'labels'
@@ -168,6 +204,7 @@ if __name__ == '__main__':
     for annotation in annotations_test:
         img, img_name, labels = process_annotation(annotation, ARGS.source, size=ARGS.size, classes=unique_classes)
         file_id = sha1(img).hexdigest()
+        file_id = str(labels[0][0]) + file_id[:8] #class id + sha1 id
         file_image_name = f'{img_name}.{file_id}.png'
         file_labels_name = f'{img_name}.{file_id}.txt'
 
