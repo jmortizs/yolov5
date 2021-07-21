@@ -8,14 +8,155 @@ from hashlib import sha1
 import random
 import numpy as np
 
-def process_annotation(xml_tree, source_path: str, size: int, classes: dict, shift_range: float = None, brightness: int = None):
+
+def get_corners(bboxes):
+
+    """Get corners of bounding boxes
+
+    Parameters
+    ----------
+
+    bboxes: numpy.ndarray
+        Numpy array containing bounding boxes of shape `N X 4` where N is the
+        number of bounding boxes and the bounding boxes are represented in the
+        format `x1 y1 x2 y2`
+
+    returns
+    -------
+
+    numpy.ndarray
+        Numpy array of shape `N x 8` containing N bounding boxes each described by their
+        corner co-ordinates `x1 y1 x2 y2 x3 y3 x4 y4`
+
+    """
+    width = (bboxes[:,2] - bboxes[:,0]).reshape(-1,1)
+    height = (bboxes[:,3] - bboxes[:,1]).reshape(-1,1)
+
+    x1 = bboxes[:,0].reshape(-1,1)
+    y1 = bboxes[:,1].reshape(-1,1)
+
+    x2 = x1 + width
+    y2 = y1
+
+    x3 = x1
+    y3 = y1 + height
+
+    x4 = bboxes[:,2].reshape(-1,1)
+    y4 = bboxes[:,3].reshape(-1,1)
+
+    corners = np.hstack((x1,y1,x2,y2,x3,y3,x4,y4))
+
+    return corners
+
+
+def rotate_box(corners,angle,  cx, cy, h, w):
+
+    """Rotate the bounding box.
+
+
+    Parameters
+    ----------
+
+    corners : numpy.ndarray
+        Numpy array of shape `N x 8` containing N bounding boxes each described by their
+        corner co-ordinates `x1 y1 x2 y2 x3 y3 x4 y4`
+
+    angle : float
+        angle by which the image is to be rotated
+
+    cx : int
+        x coordinate of the center of image (about which the box will be rotated)
+
+    cy : int
+        y coordinate of the center of image (about which the box will be rotated)
+
+    h : int
+        height of the image
+
+    w : int
+        width of the image
+
+    Returns
+    -------
+
+    numpy.ndarray
+        Numpy array of shape `N x 8` containing N rotated bounding boxes each described by their
+        corner co-ordinates `x1 y1 x2 y2 x3 y3 x4 y4`
+    """
+
+    corners = corners.reshape(-1,2)
+    corners = np.hstack((corners, np.ones((corners.shape[0],1), dtype = type(corners[0][0]))))
+
+    M = cv.getRotationMatrix2D((cx, cy), angle, 1.0)
+
+
+    cos = np.abs(M[0, 0])
+    sin = np.abs(M[0, 1])
+
+    nW = int((h * sin) + (w * cos))
+    nH = int((h * cos) + (w * sin))
+    # adjust the rotation matrix to take into account translation
+    M[0, 2] += (nW / 2) - cx
+    M[1, 2] += (nH / 2) - cy
+    # Prepare the vector to be transformed
+    calculated = np.dot(M,corners.T).T
+
+    calculated = calculated.reshape(-1,8)
+
+    return calculated
+
+
+def get_enclosing_box(corners):
+    """Get an enclosing box for ratated corners of a bounding box
+
+    Parameters
+    ----------
+
+    corners : numpy.ndarray
+        Numpy array of shape `N x 8` containing N bounding boxes each described by their
+        corner co-ordinates `x1 y1 x2 y2 x3 y3 x4 y4`
+
+    Returns
+    -------
+
+    numpy.ndarray
+        Numpy array containing enclosing bounding boxes of shape `N X 4` where N is the
+        number of bounding boxes and the bounding boxes are represented in the
+        format `x1 y1 x2 y2`
+
+    """
+    x_ = corners[:,[0,2,4,6]]
+    y_ = corners[:,[1,3,5,7]]
+
+    xmin = np.min(x_,1).reshape(-1,1)
+    ymin = np.min(y_,1).reshape(-1,1)
+    xmax = np.max(x_,1).reshape(-1,1)
+    ymax = np.max(y_,1).reshape(-1,1)
+
+    final = np.hstack((xmin, ymin, xmax, ymax,corners[:,8:]))
+
+    return final
+
+
+def process_annotation(xml_tree, source_path: str, size: int, classes: dict, rotation: bool = False, shift_range: float = None, brightness: int = None):
 
     img_path = Path(source_path) / xml_tree.find('folder').text / xml_tree.find('filename').text
 
     img = cv.imread(str(img_path))
     resize_ratio = size / max(img.shape[0], img.shape[1])
     img_res = cv.resize(img, None, fx=resize_ratio, fy=resize_ratio)
+    img_center = (img.shape[1] // 2, img.shape[0] // 2)
 
+    rotation_dict = {90: cv.ROTATE_90_COUNTERCLOCKWISE, 180: cv.ROTATE_180, 270: cv.ROTATE_90_CLOCKWISE}
+    rot_angle = 0
+    # rotation
+    if rotation:
+        rot_angle = np.random.choice([0, 90, 180, 270])
+
+        if rot_angle != 0:
+            img_res = cv.rotate(img_res, rotation_dict[rot_angle])
+
+    # add padding
     padding = size - min(img_res.shape[0], img_res.shape[1])
     top_p = 0
     bottom_p = 0
@@ -67,11 +208,16 @@ def process_annotation(xml_tree, source_path: str, size: int, classes: dict, shi
         x2 = int(label.find('bndbox').find('xmax').text)
         y2 = int(label.find('bndbox').find('ymax').text)
 
+        if rotation and rot_angle != 0:
+            corners = get_corners(np.array([[x1, y1, x2, y2]]))
+            rot_bbox = rotate_box(corners, rot_angle, img_center[0], img_center[1], img.shape[0], img.shape[1])
+            x1, y1, x2, y2 = get_enclosing_box(rot_bbox)[0]
+
         # relative poinst in original image
-        x1_r = x1 / img.shape[1]
-        y1_r = y1 / img.shape[0]
-        x2_r = x2 / img.shape[1]
-        y2_r = y2 / img.shape[0]
+        x1_r = x1 / img.shape[0] if rot_angle and rot_angle in (90, 270) else x1 / img.shape[1]
+        y1_r = y1 / img.shape[1] if rot_angle and rot_angle in (90, 270) else y1 / img.shape[0]
+        x2_r = x2 / img.shape[0] if rot_angle and rot_angle in (90, 270) else x2 / img.shape[1]
+        y2_r = y2 / img.shape[1] if rot_angle and rot_angle in (90, 270) else y2 / img.shape[0]
 
         # absolute points and relative center, widht and height in processed image
         x1_p = x1_r * (img_res.shape[1] - (left_p + right_p)) + left_p
@@ -112,7 +258,7 @@ def process_annotation(xml_tree, source_path: str, size: int, classes: dict, shi
 
         yolo_labels.append((idx, center_r[0], center_r[1], width_r, height_r))
 
-    # cv.imwrite('result_img.png', img_res)
+    #cv.imwrite('result_img.png', img_res)
     return img_res, xml_tree.find('filename').text, yolo_labels
 
 
@@ -169,7 +315,7 @@ if __name__ == '__main__':
             if n == 0: # Keep the original sample
                 img, img_name, labels = process_annotation(annotation, ARGS.source, size=ARGS.size, classes=unique_classes)
             else:
-                img, img_name, labels = process_annotation(annotation, ARGS.source, size=ARGS.size, classes=unique_classes, shift_range=0.15, brightness=0.4)
+                img, img_name, labels = process_annotation(annotation, ARGS.source, size=ARGS.size, classes=unique_classes, rotation=True, shift_range=0.10, brightness=0.4)
 
             file_id = sha1(img).hexdigest()
             file_id = str(labels[0][0]) + file_id[:8] #class id + sha1 id
