@@ -273,7 +273,7 @@ if __name__ == '__main__':
     ap.add_argument('--output', required=True, type=str, help='output folder')
 
     ARGS = ap.parse_args()
-    MAX_SAMPLES = 220
+    MAX_SAMPLES = 600
     RAMDOM_STATE = 42
 
     annotations = []
@@ -310,12 +310,12 @@ if __name__ == '__main__':
     folder_train_labels = Path(ARGS.output) / 'train' / 'labels'
     folder_train_labels.mkdir(parents=True, exist_ok=True)
     # data augmentation loop
-    for annotation in annotations_train:
+    for i, annotation in enumerate(annotations_train):
         for n in range(ARGS.augment):
             if n == 0: # Keep the original sample
                 img, img_name, labels = process_annotation(annotation, ARGS.source, size=ARGS.size, classes=unique_classes)
             else:
-                img, img_name, labels = process_annotation(annotation, ARGS.source, size=ARGS.size, classes=unique_classes, rotation=True, shift_range=0.10, brightness=0.4)
+                img, img_name, labels = process_annotation(annotation, ARGS.source, size=ARGS.size, classes=unique_classes, rotation=True, shift_range=0.10, brightness=0.45)
 
             file_id = sha1(img).hexdigest()
             file_id = str(labels[0][0]) + file_id[:8] #class id + sha1 id
@@ -328,13 +328,15 @@ if __name__ == '__main__':
                 for l in labels:
                     f.write(f'{l[0]} {l[1]} {l[2]} {l[3]} {l[4]}\n')
 
+        print(f'{i+1} of {len(annotations_train)} train annotations processed.')
+
 
     # test
     folder_test_img = Path(ARGS.output) / 'test' / 'images'
     folder_test_img.mkdir(parents=True, exist_ok=True)
     folder_test_labels = Path(ARGS.output) / 'test' / 'labels'
     folder_test_labels.mkdir(parents=True, exist_ok=True)
-    for annotation in annotations_test:
+    for i, annotation in enumerate(annotations_test):
         img, img_name, labels = process_annotation(annotation, ARGS.source, size=ARGS.size, classes=unique_classes)
         file_id = sha1(img).hexdigest()
         file_id = str(labels[0][0]) + file_id[:8] #class id + sha1 id
@@ -346,6 +348,8 @@ if __name__ == '__main__':
         with open(folder_test_labels / file_labels_name, 'w') as f:
             for l in labels:
                 f.write(f'{l[0]} {l[1]} {l[2]} {l[3]} {l[4]}\n')
+
+        print(f'{i+1} of {len(annotations_test)} test annotations processed.')
 
     # validation
     if ARGS.validation:
